@@ -82,9 +82,12 @@ jobs:
             -DCMAKE_CXX_FLAGS="-march=armv8-a" \
             -DBUILD_SHARED_LIBS=ON \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
+            -DLLAMA_BUILD_APP=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_LLAMAFILE=OFF
 
