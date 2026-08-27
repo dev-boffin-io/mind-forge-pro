@@ -1,0 +1,82 @@
+name: Build Mind-Forge Pro APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build release APK (arm64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.0'
+          cache: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK (required for llama.cpp native compilation)
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Verify Flutter setup
+        run: flutter doctor -v
+
+      # No production keystore/secrets needed. We persist the standard
+      # Android debug keystore across workflow runs so every build is
+      # signed with the SAME key — otherwise each fresh runner would
+      # generate a brand-new debug key and every release would look like
+      # a different app to Android, blocking in-place updates.
+      - name: Restore/seed debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: mind-forge-pro-debug-keystore-v1
+
+      - name: Generate debug keystore if not cached
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v \
+              -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Mind-Forge Pro Debug,O=dev-boffin-io,C=BD"
+          fi
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Build release APK (arm64 only, minified + signed)
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Locate built APK
+        id: apk
+        run: |
+          APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -n 1)
+          echo "path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mind-forge-pro-release-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30

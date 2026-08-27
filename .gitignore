@@ -1,0 +1,88 @@
+# === Flutter / Dart ===
+# Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+pubspec.lock
+
+# Flutter
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+*.g.dart
+*.freezed.dart
+*.gr.dart
+
+# Android
+**/android/local.properties
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/gradle/wrapper/gradle-wrapper.jar
+**/android/key.properties
+*.keystore
+*.jks
+
+# iOS / macOS
+**/ios/Pods/
+**/ios/.symlinks/
+**/macos/Pods/
+**/macos/.symlinks/
+
+# Web
+lib/generated_plugin_registrant.dart
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# === Android ===
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.keystore
+!debug.keystore
+google-services.json
+
+# === C / C++ ===
+*.o
+*.ko
+*.obj
+*.elf
+*.ilk
+*.map
+*.exp
+*.gch
+*.pch
+*.lib
+*.a
+*.la
+*.lo
+*.dll
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Build
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
