@@ -13,7 +13,11 @@ dependencies:
     sdk: flutter
 
   # Native llama.cpp inference via Dart FFI
-  llama_cpp_dart: ^0.0.13
+  # NOTE: this package does NOT bundle a compiled llama.cpp binary for you —
+  # the CI workflow compiles libllama.so (+ its libggml*.so dependencies)
+  # from source via the Android NDK and drops them into
+  # android/app/src/main/jniLibs/arm64-v8a/ before `flutter build apk` runs.
+  llama_cpp_dart: ^0.2.2
 
   # Local persistent storage (chat history + RAG memory)
   sqflite: ^2.3.3

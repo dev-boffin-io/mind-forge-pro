@@ -43,7 +43,7 @@ class ChatLogic {
     final relevant = await memory.retrieveRelevant(userInput, topK: 5);
     final prompt = _buildPrompt(userInput, relevant);
 
-    final rawReply = await server.generate(prompt, maxTokens: 512);
+    final rawReply = await server.generate(prompt);
     final cleanReply = await _handleActions(rawReply);
 
     final assistantMessage = ChatMessage(role: ChatRole.assistant, content: cleanReply);

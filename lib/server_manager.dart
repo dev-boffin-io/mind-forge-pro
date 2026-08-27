@@ -9,14 +9,16 @@ import 'package:shelf_router/shelf_router.dart';
 
 enum ServerStatus { stopped, starting, running, error }
 
-/// Owns the native llama.cpp model instance and exposes it over a local
+/// Owns the native llama.cpp model instance (run off the UI thread in its
+/// own isolate via [LlamaParent]/[LlamaScope]) and exposes it over a local
 /// HTTP API (/api/generate), mimicking the shape of Ollama's API just
 /// enough that other local scripts/apps can point at this port instead.
 class ServerManager {
   ServerManager._internal();
   static final ServerManager instance = ServerManager._internal();
 
-  LlamaCpp? _model;
+  LlamaParent? _parent;
+  LlamaScope? _scope;
   HttpServer? _httpServer;
 
   ServerStatus status = ServerStatus.stopped;
@@ -32,47 +34,63 @@ class ServerManager {
     _statusController.add(s);
   }
 
-  /// Load a .gguf model from local storage into the native engine.
-  /// Safe to call again with a different path to hot-swap models
-  /// (the server must be stopped first).
+  /// Load a .gguf model from local storage into the native engine, running
+  /// inference in a background isolate so it never blocks the Flutter UI
+  /// thread. Safe to call again with a different path to hot-swap models
+  /// (call [unloadModel] first).
   Future<void> loadModel(String ggufPath) async {
     try {
-      _model?.dispose();
-      final params = ContextParams()
-        ..nCtx = 4096
-        ..nBatch = 512;
-      final loadParams = ModelParams()..nGpuLayers = 0; // CPU-only baseline
+      await unloadModel();
 
-      _model = LlamaCpp(ggufPath, modelParams: loadParams, contextParams: params);
+      // The native library is bundled under jniLibs and extracted by
+      // Android alongside the APK's own native libs, so a bare filename
+      // resolves via the standard dynamic-linker search path.
+      Llama.libraryPath = 'libllama.so';
+
+      final loadCommand = LlamaLoad(
+        path: ggufPath,
+        modelParams: ModelParams(),
+        contextParams: ContextParams()..nCtx = 4096,
+        samplingParams: SamplerParams(),
+        format: ChatMLFormat(),
+      );
+
+      final parent = LlamaParent(loadCommand);
+      await parent.init();
+
+      _parent = parent;
+      _scope = LlamaScope(parent);
       loadedModelPath = ggufPath;
       lastError = null;
-    } catch (e, st) {
+    } catch (e) {
       lastError = 'Model load failed: $e';
-      _model = null;
+      _parent = null;
+      _scope = null;
       _setStatus(ServerStatus.error);
       rethrow;
     }
   }
 
-  bool get isModelLoaded => _model != null;
+  Future<void> unloadModel() async {
+    await _scope?.dispose();
+    await _parent?.dispose();
+    _scope = null;
+    _parent = null;
+    loadedModelPath = null;
+  }
 
-  /// Run a single generation synchronously against the loaded model.
-  /// Kept simple (non-streaming) for the HTTP endpoint; the in-app chat
-  /// UI can call this same method directly for lower latency.
-  Future<String> generate(String prompt, {int maxTokens = 512}) async {
-    final model = _model;
-    if (model == null) {
+  bool get isModelLoaded => _scope != null;
+
+  /// Run a single generation against the loaded model and return the full
+  /// text response. Per-request token limits aren't exposed by
+  /// [LlamaScope.sendPrompt] — configure `nPredict` on [SamplerParams] at
+  /// load time if you need a hard cap.
+  Future<String> generate(String prompt) async {
+    final scope = _scope;
+    if (scope == null) {
       throw StateError('No model loaded. Call loadModel() first.');
     }
-    final buffer = StringBuffer();
-    model.setPrompt(prompt);
-    for (var i = 0; i < maxTokens; i++) {
-      final piece = model.getNext();
-      if (piece == null) break;
-      buffer.write(piece);
-      if (model.isDone) break;
-    }
-    return buffer.toString();
+    return scope.sendPrompt(prompt);
   }
 
   Router _buildRouter() {
@@ -93,13 +111,12 @@ class ServerManager {
       try {
         final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
         final prompt = body['prompt'] as String?;
-        final maxTokens = (body['max_tokens'] as num?)?.toInt() ?? 512;
         if (prompt == null || prompt.trim().isEmpty) {
           return Response(400,
               body: jsonEncode({'error': 'Missing "prompt" field.'}),
               headers: {'content-type': 'application/json'});
         }
-        final result = await generate(prompt, maxTokens: maxTokens);
+        final result = await generate(prompt);
         return Response.ok(
           jsonEncode({'response': result}),
           headers: {'content-type': 'application/json'},
@@ -153,9 +170,9 @@ class ServerManager {
     if (wasRunning) await start();
   }
 
-  void dispose() {
-    _httpServer?.close(force: true);
-    _model?.dispose();
-    _statusController.close();
+  Future<void> dispose() async {
+    await _httpServer?.close(force: true);
+    await unloadModel();
+    await _statusController.close();
   }
 }
