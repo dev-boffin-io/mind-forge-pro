@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -24,7 +24,10 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          flutter-version: '3.24.0'
+          # No version pinned on purpose: llama_cpp_dart needs a Dart SDK
+          # >=3.7.0 (via its ffi dependency). Pinning an old Flutter version
+          # here is what broke the previous run — latest stable always
+          # bundles a current-enough Dart.
           cache: true
 
       - name: Set up Android SDK
