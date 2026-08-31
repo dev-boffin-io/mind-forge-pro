@@ -20,9 +20,6 @@
 # --- file_picker ---
 -keep class com.mr.flutter.plugin.filepicker.** { *; }
 
-# --- permission_handler ---
--keep class com.baseflow.permissionhandler.** { *; }
-
 # General safety net: don't strip anything annotated Keep, and keep
 # native method signatures so JNI/FFI symbol lookups never break.
 -keepclasseswithmembernames class * {

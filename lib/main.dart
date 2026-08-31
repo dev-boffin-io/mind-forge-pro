@@ -1,6 +1,5 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import 'chat_logic.dart';
 import 'memory_agent.dart';
@@ -88,8 +87,11 @@ class _ChatTabState extends State<ChatTab> {
     try {
       await widget.chatLogic.send(text);
     } catch (e) {
+      final friendly = e.toString().contains('No model loaded')
+          ? 'No model loaded yet — go to Server Config, select a .gguf model, and start the server first.'
+          : 'Error: $e';
       widget.chatLogic.history.add(
-        ChatMessage(role: ChatRole.system, content: 'Error: $e'),
+        ChatMessage(role: ChatRole.system, content: friendly),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -278,23 +280,19 @@ class _ServerConfigTabState extends State<ServerConfigTab> {
   String? _errorText;
 
   Future<void> _pickModel() async {
-    final storageStatus = await Permission.manageExternalStorage.request();
-    if (!storageStatus.isGranted) {
-      setState(() => _errorText = 'Storage permission denied.');
-      return;
-    }
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['gguf'],
-    );
-    final path = result?.files.single.path;
-    if (path == null) return;
-
-    setState(() {
-      _busy = true;
-      _errorText = null;
-    });
+    setState(() => _errorText = null);
     try {
+      // file_picker's default picker uses Android's Storage Access
+      // Framework (ACTION_OPEN_DOCUMENT) — no runtime storage permission
+      // is needed for it, so we go straight to the picker.
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['gguf'],
+      );
+      final path = result?.files.single.path;
+      if (path == null) return;
+
+      setState(() => _busy = true);
       await _server.loadModel(path);
       setState(() => _modelPath = path);
     } catch (e) {

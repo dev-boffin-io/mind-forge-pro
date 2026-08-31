@@ -31,8 +31,10 @@ dependencies:
   # File picking for selecting .gguf models from device storage
   file_picker: ^8.0.0+1
 
-  # Permission handling (storage access on Android 11+)
-  permission_handler: ^11.3.1
+  # No runtime permissions are requested anywhere in the app: the model
+  # picker uses Android's Storage Access Framework (needs none), and the
+  # MethodChannel-triggered native actions (e.g. flashlight) will need
+  # their own permission handling on the Kotlin side once implemented.
 
   cupertino_icons: ^1.0.8
 
