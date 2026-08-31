@@ -285,12 +285,18 @@ class _ServerConfigTabState extends State<ServerConfigTab> {
       // file_picker's default picker uses Android's Storage Access
       // Framework (ACTION_OPEN_DOCUMENT) — no runtime storage permission
       // is needed for it, so we go straight to the picker.
-      final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['gguf'],
-      );
+      // FileType.custom + allowedExtensions can throw on some Android
+      // OEM document-provider implementations when the extension (like
+      // .gguf) has no registered MIME type — even with the extension
+      // given correctly, without a leading dot. Pick from all files and
+      // validate the extension ourselves instead.
+      final result = await FilePicker.platform.pickFiles(type: FileType.any);
       final path = result?.files.single.path;
       if (path == null) return;
+      if (!path.toLowerCase().endsWith('.gguf')) {
+        setState(() => _errorText = 'Please choose a .gguf model file.');
+        return;
+      }
 
       setState(() => _busy = true);
       await _server.loadModel(path);
