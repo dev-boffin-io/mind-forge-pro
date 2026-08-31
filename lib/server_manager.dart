@@ -52,7 +52,6 @@ class ServerManager {
         modelParams: ModelParams(),
         contextParams: ContextParams()..nCtx = 4096,
         samplingParams: SamplerParams(),
-        format: ChatMLFormat(),
       );
 
       final parent = LlamaParent(loadCommand);
