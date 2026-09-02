@@ -68,7 +68,14 @@ android {
 
     packagingOptions {
         jniLibs {
-            useLegacyPackaging = false
+            // Dart FFI's dlopen() needs libllama.so to actually exist as a
+            // file at applicationInfo.nativeLibraryDir. AGP's modern
+            // default (useLegacyPackaging = false) keeps native libraries
+            // compressed inside the APK and never extracts them to disk —
+            // fine for libraries loaded via System.loadLibrary(), but it
+            // silently breaks dlopen()-by-absolute-path. Force legacy
+            // packaging so the libraries are actually extracted.
+            useLegacyPackaging = true
         }
     }
 }
