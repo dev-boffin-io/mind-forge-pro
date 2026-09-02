@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:llama_cpp_dart/llama_cpp_dart.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -34,6 +35,20 @@ class ServerManager {
     _statusController.add(s);
   }
 
+  static const _nativeLibsChannel = MethodChannel('mind_forge_pro/native_libs');
+  String? _cachedLibraryDir;
+
+  Future<String> _resolveLibraryPath() async {
+    if (_cachedLibraryDir == null) {
+      final dir = await _nativeLibsChannel.invokeMethod<String>('nativeLibraryDir');
+      if (dir == null) {
+        throw StateError('Could not resolve native library directory.');
+      }
+      _cachedLibraryDir = dir;
+    }
+    return '$_cachedLibraryDir/libllama.so';
+  }
+
   /// Load a .gguf model from local storage into the native engine, running
   /// inference in a background isolate so it never blocks the Flutter UI
   /// thread. Safe to call again with a different path to hot-swap models
@@ -42,10 +57,13 @@ class ServerManager {
     try {
       await unloadModel();
 
-      // The native library is bundled under jniLibs and extracted by
-      // Android alongside the APK's own native libs, so a bare filename
-      // resolves via the standard dynamic-linker search path.
-      Llama.libraryPath = 'libllama.so';
+      // Dart FFI's DynamicLibrary.open() calls dlopen() directly, which —
+      // unlike Java/Kotlin's System.loadLibrary() — doesn't reliably find
+      // an app's bundled jniLibs by bare filename on every device. Passing
+      // the real absolute path avoids that resolution entirely (a bare
+      // 'libllama.so' here previously caused a native SIGSEGV on some
+      // devices when dlopen silently returned null).
+      Llama.libraryPath = await _resolveLibraryPath();
 
       final loadCommand = LlamaLoad(
         path: ggufPath,
