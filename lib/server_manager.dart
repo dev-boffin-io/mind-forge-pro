@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:llama_cpp_dart/llama_cpp_dart.dart' hide Request;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -10,15 +11,21 @@ import 'package:shelf_router/shelf_router.dart';
 enum ServerStatus { stopped, starting, running, error }
 
 /// Owns the native llama.cpp engine (off the UI thread in its own worker
-/// isolate via [LlamaEngine]/[EngineSession]) and exposes it over a local
-/// HTTP API (/api/generate), mimicking the shape of Ollama's API just
-/// enough that other local scripts/apps can point at this port instead.
+/// isolate via [LlamaEngine]) and exposes it over a local HTTP API
+/// (/api/generate), mimicking the shape of Ollama's API just enough that
+/// other local scripts/apps can point at this port instead.
+///
+/// Generation goes through [EngineChat] rather than a raw prompt string:
+/// it applies the model's own embedded chat template
+/// (`llama_chat_apply_template`) and stops cleanly at the model's actual
+/// end-of-turn token, instead of us hand-formatting "User: ...\nAssistant:"
+/// text that small models tend to echo back or run past into repetition
+/// loops.
 class ServerManager {
   ServerManager._internal();
   static final ServerManager instance = ServerManager._internal();
 
   LlamaEngine? _engine;
-  EngineSession? _session;
   HttpServer? _httpServer;
 
   ServerStatus status = ServerStatus.stopped;
@@ -44,21 +51,18 @@ class ServerManager {
 
       final engine = await LlamaEngine.spawn(
         // Bare filename: llama_cpp_dart 0.9.x ships its native library in
-        // a proper Android AAR and resolves this internally — no manual
-        // path resolution needed (unlike the retired 0.2.x line).
+        // a proper Android AAR and resolves this internally.
         libraryPath: 'libllama.so',
         modelParams: ModelParams(path: ggufPath, gpuLayers: 0),
         contextParams: const ContextParams(nCtx: 4096),
       );
 
       _engine = engine;
-      _session = await engine.createSession();
       loadedModelPath = ggufPath;
       lastError = null;
     } catch (e) {
       lastError = 'Model load failed: $e';
       _engine = null;
-      _session = null;
       _setStatus(ServerStatus.error);
       rethrow;
     }
@@ -67,25 +71,36 @@ class ServerManager {
   Future<void> unloadModel() async {
     await _engine?.dispose();
     _engine = null;
-    _session = null;
     loadedModelPath = null;
   }
 
-  bool get isModelLoaded => _session != null;
+  bool get isModelLoaded => _engine != null;
 
-  /// Run a single generation against the loaded model and return the full
-  /// text response, collected from the underlying token stream.
-  Future<String> generate(String prompt) async {
-    final session = _session;
-    if (session == null) {
+  /// Run one system+user turn against the loaded model and return the
+  /// full text response, collected from the token stream. A fresh
+  /// [EngineChat] per call keeps this stateless — the caller (chat_logic)
+  /// already reconstructs whatever conversational/memory context belongs
+  /// in [systemPrompt] on every turn.
+  Future<String> generate({
+    required String systemPrompt,
+    required String userMessage,
+  }) async {
+    final engine = _engine;
+    if (engine == null) {
       throw StateError('No model loaded. Call loadModel() first.');
     }
+    final chat = await engine.createChat();
+    chat.addSystem(systemPrompt);
+    chat.addUser(userMessage);
+
     final buffer = StringBuffer();
-    await for (final event in session.generate(prompt: prompt, addSpecial: true)) {
+    await for (final event in chat.generate(
+      maxTokens: 512,
+      sampler: const SamplerParams(temperature: 0.7, topP: 0.9),
+    )) {
       if (event is TokenEvent) {
         buffer.write(event.text);
       }
-      // DoneEvent / ShiftEvent need no handling for a single-shot response.
     }
     return buffer.toString();
   }
@@ -113,7 +128,10 @@ class ServerManager {
               body: jsonEncode({'error': 'Missing "prompt" field.'}),
               headers: {'content-type': 'application/json'});
         }
-        final result = await generate(prompt);
+        final result = await generate(
+          systemPrompt: 'You are a helpful assistant.',
+          userMessage: prompt,
+        );
         return Response.ok(
           jsonEncode({'response': result}),
           headers: {'content-type': 'application/json'},

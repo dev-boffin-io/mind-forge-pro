@@ -41,9 +41,12 @@ class ChatLogic {
     await memory.insert('User: $userInput');
 
     final relevant = await memory.retrieveRelevant(userInput, topK: 5);
-    final prompt = _buildPrompt(userInput, relevant);
+    final systemPrompt = _buildSystemPrompt(relevant);
 
-    final rawReply = await server.generate(prompt);
+    final rawReply = await server.generate(
+      systemPrompt: systemPrompt,
+      userMessage: userInput,
+    );
     final cleanReply = await _handleActions(rawReply);
 
     final assistantMessage = ChatMessage(role: ChatRole.assistant, content: cleanReply);
@@ -53,21 +56,23 @@ class ChatLogic {
     return assistantMessage;
   }
 
-  String _buildPrompt(String userInput, List<MemoryEntry> context) {
+  /// Builds only the system-role content (persona + memory context).
+  /// The user's message is passed to [ServerManager.generate] separately
+  /// so EngineChat can apply the model's own chat template — no manual
+  /// "User:"/"Assistant:" text for the model to see and potentially echo
+  /// back or continue past.
+  String _buildSystemPrompt(List<MemoryEntry> context) {
     final buffer = StringBuffer();
     buffer.writeln(
-      'You are Mind-Forge, an offline personal AI assistant running entirely '
-      'on-device. Use the memory notes below only if relevant.',
+      'Your name is Mind-Forge, an offline personal AI assistant running '
+      'entirely on-device. Use the memory notes below only if relevant.',
     );
     if (context.isNotEmpty) {
-      buffer.writeln('\n--- Relevant memory ---');
+      buffer.writeln('\nRelevant memory:');
       for (final entry in context) {
         buffer.writeln('- ${entry.content}');
       }
-      buffer.writeln('--- end memory ---\n');
     }
-    buffer.writeln('User: $userInput');
-    buffer.write('Assistant:');
     return buffer.toString();
   }
 
