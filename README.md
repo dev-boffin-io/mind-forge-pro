@@ -20,7 +20,7 @@ serves itself over a local HTTP API.
 | Layer | Tech |
 |---|---|
 | UI | Flutter (Material 3) |
-| Inference | [llama_cpp_dart](https://pub.dev/packages/llama_cpp_dart), off the UI thread via `LlamaParent`/`LlamaScope` |
+| Inference | [llama_cpp_dart](https://pub.dev/packages/llama_cpp_dart) 0.9.x, off the UI thread via `LlamaEngine`/`EngineSession` |
 | Local server | `shelf` + `shelf_router` |
 | Memory / RAG | `sqflite` + a pure-Dart TF-IDF keyword ranker |
 | Native actions | a `MethodChannel` the model can trigger via `<ACTION: X>` tags |
@@ -30,10 +30,13 @@ serves itself over a local HTTP API.
 CI (`.github/workflows/build-apk.yml`) does everything needed for a
 sideloadable release APK — no production keystore required:
 
-1. Compiles `libllama.so` (+ its `libggml*.so` dependencies) from the
-   `llama.cpp` source via the Android NDK, since `llama_cpp_dart` 0.2.x is a
-   pure FFI binding and ships no prebuilt binary itself. The result lands in
-   `android/app/src/main/jniLibs/arm64-v8a/`.
+1. Downloads `llama_cpp_dart`'s prebuilt Android AAR (CPU + mtmd,
+   arm64-v8a) from its GitHub Releases, matching the exact version pinned
+   in `pubspec.yaml`, into `android/app/libs/llama-cpp-dart.aar`. No native
+   compilation happens in this project at all — 0.9.x ships binaries built
+   against its own pinned llama.cpp commit, which is also why the earlier
+   from-source NDK build (against an unpinned llama.cpp clone) kept hitting
+   ABI mismatches.
 2. Runs `flutter build apk --release --target-platform android-arm64` with
    R8/ProGuard shrinking and native debug-symbol stripping enabled
    (`android/app/build.gradle`).
@@ -44,15 +47,15 @@ sideloadable release APK — no production keystore required:
    Store–ready signature.)
 4. Uploads the finished APK as a workflow artifact.
 
-To build locally instead, you'll need the Android NDK on your `PATH` and a
-compiled `libllama.so` for your target ABI in
-`android/app/src/main/jniLibs/<abi>/` before running `flutter build apk`.
+To build locally instead, download `llama-cpp-dart.aar` yourself (see
+[the package's install instructions](https://github.com/netdur/llama_cpp_dart#install))
+into `android/app/libs/` before running `flutter build apk`.
 
 ## Status
 
 Early scaffold — chat, memory, and server-management UI are wired up;
-model loading and generation go through the real `llama_cpp_dart` API
-(`LlamaParent` + `LlamaScope`), but this hasn't yet been run against a real
-device/model. Treat native-library and API surface details as "verify
-against whatever `llama_cpp_dart` version is pinned in `pubspec.yaml`" —
-that package's public API has changed release to release.
+model loading and generation go through `llama_cpp_dart`'s `LlamaEngine`/
+`EngineSession` API (0.9.x line — a prerelease, still pre-1.0 with
+occasional breaking changes). Verify current API shape against whatever
+`llama_cpp_dart` version is pinned in `pubspec.yaml` before assuming any
+snippet here still matches.

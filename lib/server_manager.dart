@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:llama_cpp_dart/llama_cpp_dart.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -10,16 +9,16 @@ import 'package:shelf_router/shelf_router.dart';
 
 enum ServerStatus { stopped, starting, running, error }
 
-/// Owns the native llama.cpp model instance (run off the UI thread in its
-/// own isolate via [LlamaParent]/[LlamaScope]) and exposes it over a local
+/// Owns the native llama.cpp engine (off the UI thread in its own worker
+/// isolate via [LlamaEngine]/[EngineSession]) and exposes it over a local
 /// HTTP API (/api/generate), mimicking the shape of Ollama's API just
 /// enough that other local scripts/apps can point at this port instead.
 class ServerManager {
   ServerManager._internal();
   static final ServerManager instance = ServerManager._internal();
 
-  LlamaParent? _parent;
-  LlamaScope? _scope;
+  LlamaEngine? _engine;
+  EngineSession? _session;
   HttpServer? _httpServer;
 
   ServerStatus status = ServerStatus.stopped;
@@ -35,79 +34,60 @@ class ServerManager {
     _statusController.add(s);
   }
 
-  static const _nativeLibsChannel = MethodChannel('mind_forge_pro/native_libs');
-  String? _cachedLibraryDir;
-
-  Future<String> _resolveLibraryPath() async {
-    if (_cachedLibraryDir == null) {
-      final dir = await _nativeLibsChannel.invokeMethod<String>('nativeLibraryDir');
-      if (dir == null) {
-        throw StateError('Could not resolve native library directory.');
-      }
-      _cachedLibraryDir = dir;
-    }
-    return '$_cachedLibraryDir/libllama.so';
-  }
-
   /// Load a .gguf model from local storage into the native engine, running
-  /// inference in a background isolate so it never blocks the Flutter UI
-  /// thread. Safe to call again with a different path to hot-swap models
-  /// (call [unloadModel] first).
+  /// inference in a background worker isolate so it never blocks the
+  /// Flutter UI thread. Safe to call again with a different path to
+  /// hot-swap models (call [unloadModel] first).
   Future<void> loadModel(String ggufPath) async {
     try {
       await unloadModel();
 
-      // Dart FFI's DynamicLibrary.open() calls dlopen() directly, which —
-      // unlike Java/Kotlin's System.loadLibrary() — doesn't reliably find
-      // an app's bundled jniLibs by bare filename on every device. Passing
-      // the real absolute path avoids that resolution entirely (a bare
-      // 'libllama.so' here previously caused a native SIGSEGV on some
-      // devices when dlopen silently returned null).
-      Llama.libraryPath = await _resolveLibraryPath();
-
-      final loadCommand = LlamaLoad(
-        path: ggufPath,
-        modelParams: ModelParams(),
-        contextParams: ContextParams()..nCtx = 4096,
-        samplingParams: SamplerParams(),
+      final engine = await LlamaEngine.spawn(
+        // Bare filename: llama_cpp_dart 0.9.x ships its native library in
+        // a proper Android AAR and resolves this internally — no manual
+        // path resolution needed (unlike the retired 0.2.x line).
+        libraryPath: 'libllama.so',
+        modelParams: ModelParams(path: ggufPath, gpuLayers: 0),
+        contextParams: const ContextParams(nCtx: 4096),
       );
 
-      final parent = LlamaParent(loadCommand);
-      await parent.init();
-
-      _parent = parent;
-      _scope = LlamaScope(parent);
+      _engine = engine;
+      _session = await engine.createSession();
       loadedModelPath = ggufPath;
       lastError = null;
     } catch (e) {
       lastError = 'Model load failed: $e';
-      _parent = null;
-      _scope = null;
+      _engine = null;
+      _session = null;
       _setStatus(ServerStatus.error);
       rethrow;
     }
   }
 
   Future<void> unloadModel() async {
-    await _scope?.dispose();
-    await _parent?.dispose();
-    _scope = null;
-    _parent = null;
+    await _engine?.dispose();
+    _engine = null;
+    _session = null;
     loadedModelPath = null;
   }
 
-  bool get isModelLoaded => _scope != null;
+  bool get isModelLoaded => _session != null;
 
   /// Run a single generation against the loaded model and return the full
-  /// text response. Per-request token limits aren't exposed by
-  /// [LlamaScope.sendPrompt] — configure `nPredict` on [SamplerParams] at
-  /// load time if you need a hard cap.
+  /// text response, collected from the underlying token stream.
   Future<String> generate(String prompt) async {
-    final scope = _scope;
-    if (scope == null) {
+    final session = _session;
+    if (session == null) {
       throw StateError('No model loaded. Call loadModel() first.');
     }
-    return scope.sendPrompt(prompt);
+    final buffer = StringBuffer();
+    await for (final event in session.generate(prompt: prompt, addSpecial: true)) {
+      if (event is TokenEvent) {
+        buffer.write(event.text);
+      }
+      // DoneEvent / ShiftEvent need no handling for a single-shot response.
+    }
+    return buffer.toString();
   }
 
   Router _buildRouter() {

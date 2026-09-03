@@ -33,12 +33,6 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android NDK (required for llama.cpp native compilation)
-        run: |
-          sdkmanager --install "ndk;28.2.13676358"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/28.2.13676358" >> "$GITHUB_ENV"
-
       - name: Verify Flutter setup
         run: flutter doctor -v
 
@@ -77,44 +71,18 @@ jobs:
       - name: Get Flutter dependencies
         run: flutter pub get
 
-      # llama_cpp_dart (0.2.x line) is a pure FFI binding — it does NOT ship
-      # a compiled llama.cpp binary. We build libllama.so (and the libggml*.so
-      # it depends on) ourselves and place them where the Android Gradle
-      # plugin picks up native libs automatically: jniLibs/<abi>/.
-      - name: Build llama.cpp shared libraries for arm64-v8a
+      # llama_cpp_dart 0.9.x ships no source to compile — it publishes a
+      # prebuilt Android AAR (CPU + mtmd, arm64-v8a) from its own CI, built
+      # against whatever llama.cpp commit that package version is pinned
+      # to. We just fetch the release asset matching our pinned pubspec
+      # version and drop it where Gradle expects a local .aar dependency.
+      - name: Download llama_cpp_dart prebuilt Android AAR
         run: |
-          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git /tmp/llama.cpp
-          cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build-android \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared \
-            -DCMAKE_C_FLAGS="-march=armv8-a" \
-            -DCMAKE_CXX_FLAGS="-march=armv8-a" \
-            -DBUILD_SHARED_LIBS=ON \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DLLAMA_BUILD_APP=OFF \
-            -DGGML_OPENMP=OFF \
-            -DGGML_LLAMAFILE=OFF
-
-          cmake --build /tmp/llama.cpp/build-android --config Release -j"$(nproc)"
-
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          find /tmp/llama.cpp/build-android -name "*.so" -exec cp -v {} android/app/src/main/jniLibs/arm64-v8a/ \;
-
-          # We just switched every llama.cpp .so to link against libc++
-          # dynamically (-DANDROID_STL=c++_shared above) instead of each
-          # statically embedding its own copy — so libc++_shared.so itself
-          # now has to ship in the APK too, or loading will fail at runtime.
-          find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -name "libc++_shared.so" -path "*aarch64*" \
-            -exec cp -v {} android/app/src/main/jniLibs/arm64-v8a/ \; -quit
-
-          ls -la android/app/src/main/jniLibs/arm64-v8a/
+          mkdir -p android/app/libs
+          curl -fL \
+            "https://github.com/netdur/llama_cpp_dart/releases/download/v0.9.0-dev.12/llama-cpp-dart.aar" \
+            -o android/app/libs/llama-cpp-dart.aar
+          ls -la android/app/libs/
 
       - name: Build release APK (arm64 only, minified + signed)
         run: flutter build apk --release --target-platform android-arm64

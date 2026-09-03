@@ -10,6 +10,7 @@ pubspec.lock
 android/.gradle/
 android/local.properties
 android/app/src/main/jniLibs/
+android/app/libs/*.aar
 *.jks
 *.keystore
 

@@ -12,12 +12,17 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Native llama.cpp inference via Dart FFI
-  # NOTE: this package does NOT bundle a compiled llama.cpp binary for you —
-  # the CI workflow compiles libllama.so (+ its libggml*.so dependencies)
-  # from source via the Android NDK and drops them into
-  # android/app/src/main/jniLibs/arm64-v8a/ before `flutter build apk` runs.
-  llama_cpp_dart: ^0.2.2
+  # Native llama.cpp inference via Dart FFI — LlamaEngine API (0.9.x line).
+  # The 0.2.x line used earlier is retired by the maintainer; its FFI
+  # bindings are pinned to a specific llama.cpp submodule commit, which our
+  # from-source NDK build (cloning llama.cpp's unpinned master branch) could
+  # never reliably match — the likely cause of the native crashes we hit.
+  # 0.9.x ships a prebuilt Android AAR from the package's own CI instead, so
+  # the CI workflow downloads llama-cpp-dart.aar into android/app/libs/
+  # rather than compiling anything itself. Pinned to an exact prerelease
+  # (not ^) since pub's caret ranges don't span prereleases, and the API
+  # itself still has occasional breaking changes pre-1.0.
+  llama_cpp_dart: 0.9.0-dev.12
 
   # Local persistent storage (chat history + RAG memory)
   sqflite: ^2.3.3
