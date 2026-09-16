@@ -32,6 +32,13 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The action's default "tools platform-tools" fails because Google
+          # removed the legacy "tools" package from the SDK repository —
+          # sdkmanager bails with "Failed to find package 'tools'" on these
+          # runners. Gradle installs platforms/build-tools itself; we only
+          # need platform-tools (adb) + cmdline-tools (sdkmanager) up front.
+          packages: 'platform-tools'
 
       - name: Verify Flutter setup
         run: flutter doctor -v
