@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
+import 'package:llama_cpp_dart/llama_cpp_dart.dart' as llama;
 
 import 'memory_agent.dart';
 import 'server_manager.dart';
@@ -36,7 +37,16 @@ class ChatLogic {
 
   /// Send a user message, get the assistant's reply, and handle any
   /// side effects (persistence + native actions).
+  ///
+  /// Prior user/assistant turns in [history] are seeded into the model's
+  /// prompt so a conversation stays coherent across turns (system-role
+  /// entries, e.g. error notices, are excluded).
   Future<ChatMessage> send(String userInput) async {
+    final prior = history
+        .where((m) => m.role == ChatRole.user || m.role == ChatRole.assistant)
+        .map((m) => llama.ChatMessage(role: m.role.name, content: m.content))
+        .toList();
+
     history.add(ChatMessage(role: ChatRole.user, content: userInput));
     await memory.insert('User: $userInput');
 
@@ -46,6 +56,7 @@ class ChatLogic {
     final rawReply = await server.generate(
       systemPrompt: systemPrompt,
       userMessage: userInput,
+      history: prior,
     );
     final cleanReply = await _handleActions(rawReply);
 

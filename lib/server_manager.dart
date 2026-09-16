@@ -76,14 +76,17 @@ class ServerManager {
 
   bool get isModelLoaded => _engine != null;
 
-  /// Run one system+user turn against the loaded model and return the
-  /// full text response, collected from the token stream. A fresh
-  /// [EngineChat] per call keeps this stateless — the caller (chat_logic)
-  /// already reconstructs whatever conversational/memory context belongs
-  /// in [systemPrompt] on every turn.
+  /// Run a turn against the loaded model and return the full text response,
+  /// collected from the token stream. A fresh [EngineChat] per call keeps
+  /// each request independent, but [history] can seed the conversation so
+  /// the model still sees the earlier user/assistant turns — it re-renders
+  /// the full message list (via the model's chat template) on every call.
+  /// [history] is ignored by callers that want a one-shot prompt (e.g. the
+  /// HTTP /api/generate endpoint).
   Future<String> generate({
     required String systemPrompt,
     required String userMessage,
+    List<ChatMessage> history = const [],
   }) async {
     final engine = _engine;
     if (engine == null) {
@@ -91,6 +94,9 @@ class ServerManager {
     }
     final chat = await engine.createChat();
     chat.addSystem(systemPrompt);
+    for (final message in history) {
+      chat.addMessage(message);
+    }
     chat.addUser(userMessage);
 
     final buffer = StringBuffer();

@@ -88,7 +88,7 @@ class _ChatTabState extends State<ChatTab> {
       await widget.chatLogic.send(text);
     } catch (e) {
       final friendly = e.toString().contains('No model loaded')
-          ? 'No model loaded yet — go to Server Config, select a .gguf model, and start the server first.'
+          ? 'No model loaded yet — go to Server Config and select a .gguf model first. In-app chat does not need the HTTP server; it only needs a loaded model.'
           : 'Error: $e';
       widget.chatLogic.history.add(
         ChatMessage(role: ChatRole.system, content: friendly),
@@ -124,6 +124,20 @@ class _ChatTabState extends State<ChatTab> {
             itemBuilder: (context, i) => _MessageBubble(message: messages[i]),
           ),
         ),
+        if (!widget.chatLogic.server.isModelLoaded)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.amber.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Text(
+              'No model loaded — open Server Config and select a .gguf model to start chatting.',
+              style: TextStyle(fontSize: 12, color: Colors.amber),
+            ),
+          ),
         if (_sending) const LinearProgressIndicator(minHeight: 2),
         Padding(
           padding: const EdgeInsets.all(8.0),
