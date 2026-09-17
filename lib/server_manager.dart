@@ -93,22 +93,34 @@ class ServerManager {
       throw StateError('No model loaded. Call loadModel() first.');
     }
     final chat = await engine.createChat();
-    chat.addSystem(systemPrompt);
-    for (final message in history) {
-      chat.addMessage(message);
-    }
-    chat.addUser(userMessage);
-
-    final buffer = StringBuffer();
-    await for (final event in chat.generate(
-      maxTokens: 512,
-      sampler: const SamplerParams(temperature: 0.7, topP: 0.9),
-    )) {
-      if (event is TokenEvent) {
-        buffer.write(event.text);
+    try {
+      chat.addSystem(systemPrompt);
+      for (final message in history) {
+        chat.addMessage(message);
       }
+      chat.addUser(userMessage);
+
+      final buffer = StringBuffer();
+      await for (final event in chat.generate(
+        maxTokens: 2048,
+        shiftPolicy: ContextShiftPolicy.auto,
+        shift: const ContextShift(nKeep: -1),
+        sampler: const SamplerParams(
+          temperature: 0.7,
+          topP: 0.9,
+          repeatPenalty: 1.1,
+          frequencyPenalty: 0.1,
+          presencePenalty: 0.1,
+        ),
+      )) {
+        if (event is TokenEvent) {
+          buffer.write(event.text);
+        }
+      }
+      return buffer.toString();
+    } finally {
+      await chat.dispose();
     }
-    return buffer.toString();
   }
 
   Router _buildRouter() {
@@ -134,8 +146,14 @@ class ServerManager {
               body: jsonEncode({'error': 'Missing "prompt" field.'}),
               headers: {'content-type': 'application/json'});
         }
+        final systemPrompt = (body['system'] as String?)?.trim() ?? '';
         final result = await generate(
-          systemPrompt: 'You are a helpful assistant.',
+          systemPrompt: systemPrompt.isEmpty
+              ? 'You are a helpful assistant. Always respond in the same '
+                    'language the user writes in. If the user writes in '
+                    'Bengali, respond in Bengali. If the user writes in '
+                    'English, respond in English.'
+              : systemPrompt,
           userMessage: prompt,
         );
         return Response.ok(

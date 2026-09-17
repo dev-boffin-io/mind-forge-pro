@@ -76,12 +76,18 @@ class ChatLogic {
     final buffer = StringBuffer();
     buffer.writeln(
       'Your name is Mind-Forge, an offline personal AI assistant running '
-      'entirely on-device. Use the memory notes below only if relevant.',
+      'entirely on-device. '
+      'Always respond in the same language the user writes in. '
+      'If the user writes in Bengali, respond in Bengali. '
+      'If the user writes in English, respond in English. '
+      'Mirror the user\'s language naturally without announcing the switch.',
     );
     if (context.isNotEmpty) {
       buffer.writeln('\nRelevant memory:');
       for (final entry in context) {
-        buffer.writeln('- ${entry.content}');
+        final clean = entry.content
+            .replaceFirst(RegExp(r'^(User|Assistant):\s*'), '');
+        buffer.writeln('- $clean');
       }
     }
     return buffer.toString();
