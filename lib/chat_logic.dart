@@ -20,6 +20,11 @@ class ChatMessage {
 /// Extend this map as more native capabilities are wired up.
 final _actionPattern = RegExp(r'<ACTION:\s*([A-Z_]+)>');
 
+/// Reasoning tags emitted by thinking models (DeepSeek-R1, Qwen3, etc.).
+/// The chain-of-thought inside these tags is internal reasoning and should
+/// not be shown to the user.
+final _thoughtPattern = RegExp(r'<thought>[\s\S]*?</thought>', dotAll: true);
+
 /// Orchestrates a single turn: retrieve relevant memory -> build a
 /// context-augmented prompt -> run inference -> persist -> dispatch any
 /// native actions the model requested.
@@ -109,6 +114,9 @@ class ChatLogic {
         print('Action "$action" failed: ${e.message}');
       }
     }
-    return rawReply.replaceAll(_actionPattern, '').trim();
+    return rawReply
+        .replaceAll(_actionPattern, '')
+        .replaceAll(_thoughtPattern, '')
+        .trim();
   }
 }
