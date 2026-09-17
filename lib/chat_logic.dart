@@ -141,7 +141,8 @@ class ChatLogic {
         llama.ChatMessage(role: 'assistant', content: raw),
       ];
       userMessage = 'Your previous reply was invalid because it was $problem. '
-          'It was not shown to the user. The user\'s actual question was '
+          'It was not shown to the user. Do not use any thinking or '
+          'reasoning blocks. The user\'s actual question was '
           '"$userInput". Answer it directly and naturally in the user\'s '
           'language now.';
     }
@@ -186,9 +187,11 @@ class ChatLogic {
       'entirely on-device. '
       'Always respond in the same language the user writes in (Bengali, '
       'English, etc.) and mirror it naturally without announcing the switch. '
-      'Reply with only your answer. Never repeat the user\'s question back '
-      'at them. Never start your reply with "User:" or "Assistant:" and '
-      'never continue the conversation on your own.',
+      'Answer directly, without thinking out loud: do not output any '
+      'reasoning or "thinking" blocks, just the answer. '
+      'Never repeat the user\'s question back at them. Never start your '
+      'reply with "User:" or "Assistant:" and never continue the '
+      'conversation on your own.',
     );
     if (context.isNotEmpty) {
       buffer.writeln('\nRelevant memory:');

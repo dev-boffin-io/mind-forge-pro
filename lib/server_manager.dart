@@ -92,6 +92,19 @@ class ServerManager {
     if (engine == null) {
       throw StateError('No model loaded. Call loadModel() first.');
     }
+
+    // Qwen3 is a thinking model: its default chat template makes it spend
+    // tokens on an English chain-of-thought and then often fails to produce
+    // the real answer (empty replies / echoes of the user's message) in
+    // languages it's weaker at, like Bengali. Render a plain non-thinking
+    // ChatML prompt manually so it answers directly.
+    if (_isQwen3()) {
+      return _generateRaw(
+        engine,
+        _renderQwen3Prompt(systemPrompt, userMessage, history),
+      );
+    }
+
     final chat = await engine.createChat();
     try {
       chat.addSystem(systemPrompt);
@@ -100,28 +113,82 @@ class ServerManager {
       }
       chat.addUser(userMessage);
 
-      final buffer = StringBuffer();
+      return await _generateRaw(engine, null, chat: chat);
+    } finally {
+      await chat.dispose();
+    }
+  }
+
+  /// Shared streaming generation loop with the tuned sampler settings.
+  Future<String> _generateRaw(
+    LlamaEngine engine, [
+    String? prompt,
+    EngineChat? chat,
+  ]) async {
+    final buffer = StringBuffer();
+    if (chat != null) {
       await for (final event in chat.generate(
-        maxTokens: 2048,
+        maxTokens: _maxTokens,
         shiftPolicy: ContextShiftPolicy.auto,
         shift: const ContextShift(nKeep: -1),
-        sampler: const SamplerParams(
-          temperature: 0.7,
-          topP: 0.9,
-          repeatPenalty: 1.1,
-          frequencyPenalty: 0.1,
-          presencePenalty: 0.1,
-        ),
+        sampler: _sampler,
       )) {
         if (event is TokenEvent) {
           buffer.write(event.text);
         }
       }
-      return buffer.toString();
-    } finally {
-      await chat.dispose();
+    } else {
+      final session = await engine.createSession();
+      try {
+        await for (final event in session.generate(
+          prompt: prompt,
+          addSpecial: true,
+          maxTokens: _maxTokens,
+          shiftPolicy: ContextShiftPolicy.auto,
+          shift: const ContextShift(nKeep: -1),
+          sampler: _sampler,
+        )) {
+          if (event is TokenEvent) {
+            buffer.write(event.text);
+          }
+        }
+      } finally {
+        await session.dispose();
+      }
     }
+    return buffer.toString();
   }
+
+  static const _maxTokens = 2048;
+  static const _sampler = SamplerParams(
+    temperature: 0.7,
+    topP: 0.9,
+    repeatPenalty: 1.1,
+    frequencyPenalty: 0.1,
+    presencePenalty: 0.1,
+  );
+
+  /// Render a Qwen non-thinking ChatML prompt. No "thinking"/reasoning
+  /// header is emitted, so the model answers directly.
+  String _renderQwen3Prompt(
+    String systemPrompt,
+    String userMessage,
+    List<ChatMessage> history,
+  ) {
+    final buffer = StringBuffer();
+    buffer.write('<|im_start|>system\n$systemPrompt<|im_end|>\n');
+    for (final message in history) {
+      buffer.write(
+        '<|im_start|>${message.role}\n${message.content}<|im_end|>\n',
+      );
+    }
+    buffer.write('<|im_start|>user\n$userMessage<|im_end|>\n');
+    buffer.write('<|im_start|>assistant\n');
+    return buffer.toString();
+  }
+
+  bool _isQwen3() =>
+      (loadedModelPath?.toLowerCase() ?? '').contains('qwen3');
 
   Router _buildRouter() {
     final router = Router();
