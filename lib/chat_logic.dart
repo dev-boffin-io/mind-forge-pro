@@ -22,14 +22,56 @@ final _actionPattern = RegExp(r'<ACTION:\s*([A-Z_]+)>');
 
 /// Reasoning tags emitted by thinking models (DeepSeek-R1, Qwen3, etc.).
 /// The chain-of-thought inside these tags is internal reasoning and should
-/// not be shown to the user.
-final _thoughtPattern = RegExp(r'<thought>[\s\S]*?</thought>', dotAll: true);
+/// never be shown to the user.
+final List<RegExp> _reasoningPatterns = [
+  RegExp(r'<thought[^>]*>[\s\S]*?</thought\s*>', caseSensitive: false),
+  RegExp(r'<think[^>]*>[\s\S]*?</think\s*>', caseSensitive: false),
+  RegExp(r'<reasoning[^>]*>[\s\S]*?</reasoning\s*>', caseSensitive: false),
+  RegExp(r'<\|thinking\|>[\s\S]*?</\|thinking\|>', caseSensitive: false),
+  RegExp(r'<\|thought\|>[\s\S]*?</\|thought\|>', caseSensitive: false),
+];
+
+/// Role labels / special tokens that mark where the model stopped answering
+/// and started running the transcript on its own. Anything from the first
+/// such marker onward is discarded.
+final List<RegExp> _transcriptMarkers = [
+  RegExp(r'<\|im_start\|>', caseSensitive: false),
+  RegExp(r'<\|im_end\|>', caseSensitive: false),
+  RegExp(r'</?s>', caseSensitive: false),
+  RegExp(r'\[/INST\]', caseSensitive: false),
+  RegExp(r'### (?:Human|Assistant)\s*:', caseSensitive: false),
+];
+
+/// Cut [text] at the first transcript-continuation marker (a stray role
+/// label or special token) and drop a leading "Assistant:"/"AI:" template
+/// prefix so only the model's actual answer remains.
+String _truncateAtTranscriptMarker(String text) {
+  var work = text.replaceFirst(
+    RegExp(r'^(?:Assistant|AI)\s*:\s*', caseSensitive: false),
+    '',
+  );
+  final roles = RegExp(
+    r'(?:\n\s*)(?:User|Assistant|System|Human|AI)\s*:',
+    caseSensitive: false,
+  );
+  final roleMatch = roles.firstMatch(work);
+  if (roleMatch != null) work = work.substring(0, roleMatch.start);
+  for (final marker in _transcriptMarkers) {
+    final m = marker.firstMatch(work);
+    if (m != null) {
+      work = work.substring(0, m.start);
+      break;
+    }
+  }
+  return work;
+}
 
 /// Orchestrates a single turn: retrieve relevant memory -> build a
 /// context-augmented prompt -> run inference -> persist -> dispatch any
 /// native actions the model requested.
 class ChatLogic {
   static const _actionChannel = MethodChannel('mind_forge_pro/actions');
+  static const _maxAttempts = 3;
 
   final MemoryAgent memory;
   final ServerManager server;
@@ -58,12 +100,8 @@ class ChatLogic {
     final relevant = await memory.retrieveRelevant(userInput, topK: 5);
     final systemPrompt = _buildSystemPrompt(relevant);
 
-    final rawReply = await server.generate(
-      systemPrompt: systemPrompt,
-      userMessage: userInput,
-      history: prior,
-    );
-    final cleanReply = await _handleActions(rawReply);
+    final reply = await _generateReply(userInput, prior, systemPrompt);
+    final cleanReply = await _handleActions(reply);
 
     final assistantMessage = ChatMessage(role: ChatRole.assistant, content: cleanReply);
     history.add(assistantMessage);
@@ -71,6 +109,70 @@ class ChatLogic {
 
     return assistantMessage;
   }
+
+  /// Agentic self-correction loop: generate -> clean -> validate -> retry.
+  ///
+  /// Small on-device models routinely produce invalid turns — empty replies,
+  /// echoes of the user's message, leaked reasoning tags, or transcript
+  /// continuation. When a turn fails validation, the failure is fed back to
+  /// the model as a corrective request and the answer is regenerated, so the
+  /// final reply is clean and natural.
+  Future<String> _generateReply(
+    String userInput,
+    List<llama.ChatMessage> prior,
+    String systemPrompt,
+  ) async {
+    var history = prior;
+    var userMessage = userInput;
+    var lastReply = '';
+    for (var attempt = 0; attempt < _maxAttempts; attempt++) {
+      final raw = await server.generate(
+        systemPrompt: systemPrompt,
+        userMessage: userMessage,
+        history: history,
+      );
+      final cleaned = _cleanRawReply(raw);
+      final problem = _validateReply(cleaned, userInput);
+      if (problem == null) return cleaned;
+
+      lastReply = cleaned;
+      history = [
+        ...prior,
+        llama.ChatMessage(role: 'assistant', content: raw),
+      ];
+      userMessage = 'Your previous reply was invalid because it was $problem. '
+          'It was not shown to the user. The user\'s actual question was '
+          '"$userInput". Answer it directly and naturally in the user\'s '
+          'language now.';
+    }
+    return lastReply;
+  }
+
+  /// Remove reasoning/thinking blocks and truncate any transcript
+  /// continuation the model produced past its turn.
+  String _cleanRawReply(String raw) {
+    var text = raw;
+    for (final pattern in _reasoningPatterns) {
+      text = text.replaceAll(pattern, ' ');
+    }
+    return _truncateAtTranscriptMarker(text).trim();
+  }
+
+  /// Returns a description of why [reply] is invalid, or null if it's fine.
+  String? _validateReply(String reply, String userInput) {
+    if (reply.trim().isEmpty) {
+      return 'empty';
+    }
+    if (_normalize(reply) == _normalize(userInput)) {
+      return 'a copy of the user\'s message';
+    }
+    return null;
+  }
+
+  /// Collapse to bare words so minor punctuation/whitespace differences
+  /// don't hide a pure echo of the user's input.
+  String _normalize(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ');
 
   /// Builds only the system-role content (persona + memory context).
   /// The user's message is passed to [ServerManager.generate] separately
@@ -82,10 +184,11 @@ class ChatLogic {
     buffer.writeln(
       'Your name is Mind-Forge, an offline personal AI assistant running '
       'entirely on-device. '
-      'Always respond in the same language the user writes in. '
-      'If the user writes in Bengali, respond in Bengali. '
-      'If the user writes in English, respond in English. '
-      'Mirror the user\'s language naturally without announcing the switch.',
+      'Always respond in the same language the user writes in (Bengali, '
+      'English, etc.) and mirror it naturally without announcing the switch. '
+      'Reply with only your answer. Never repeat the user\'s question back '
+      'at them. Never start your reply with "User:" or "Assistant:" and '
+      'never continue the conversation on your own.',
     );
     if (context.isNotEmpty) {
       buffer.writeln('\nRelevant memory:');
@@ -114,9 +217,6 @@ class ChatLogic {
         print('Action "$action" failed: ${e.message}');
       }
     }
-    return rawReply
-        .replaceAll(_actionPattern, '')
-        .replaceAll(_thoughtPattern, '')
-        .trim();
+    return rawReply.replaceAll(_actionPattern, '').trim();
   }
 }
