@@ -101,7 +101,7 @@ class ServerManager {
     if (_isQwen3()) {
       return _generateRaw(
         engine,
-        _renderQwen3Prompt(systemPrompt, userMessage, history),
+        prompt: _renderQwen3Prompt(systemPrompt, userMessage, history),
       );
     }
 
@@ -113,7 +113,7 @@ class ServerManager {
       }
       chat.addUser(userMessage);
 
-      return await _generateRaw(engine, null, chat: chat);
+      return await _generateRaw(engine, chat: chat);
     } finally {
       await chat.dispose();
     }
@@ -121,10 +121,10 @@ class ServerManager {
 
   /// Shared streaming generation loop with the tuned sampler settings.
   Future<String> _generateRaw(
-    LlamaEngine engine, [
+    LlamaEngine engine, {
     String? prompt,
     EngineChat? chat,
-  ]) async {
+  }) async {
     final buffer = StringBuffer();
     if (chat != null) {
       await for (final event in chat.generate(
