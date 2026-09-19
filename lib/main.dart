@@ -1,11 +1,14 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'app_settings.dart';
 import 'chat_logic.dart';
 import 'memory_agent.dart';
 import 'server_manager.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppSettings.instance.load();
   runApp(const MindForgeApp());
 }
 
@@ -44,6 +47,7 @@ class _HomeShellState extends State<HomeShell> {
       ChatTab(chatLogic: _chatLogic),
       MemoryTab(memory: _chatLogic.memory),
       const ServerConfigTab(),
+      const SettingsTab(),
     ];
 
     return Scaffold(
@@ -55,6 +59,7 @@ class _HomeShellState extends State<HomeShell> {
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
           NavigationDestination(icon: Icon(Icons.storage_outlined), label: 'Memory DB'),
           NavigationDestination(icon: Icon(Icons.dns_outlined), label: 'Server Config'),
+          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
     );
@@ -99,6 +104,42 @@ class _ChatTabState extends State<ChatTab> {
     }
   }
 
+  /// Shows which chat backend is active. When the local engine is selected
+  /// but no model is loaded, prompts the user to pick a .gguf file. When a
+  /// remote backend is selected, shows its endpoint so it's obvious where
+  /// answers are coming from.
+  Widget _backendStatusBanner() {
+    final settings = AppSettings.instance;
+    final String message;
+    final Color color;
+    if (settings.backendType == BackendType.local) {
+      if (widget.chatLogic.server.isModelLoaded) return const SizedBox.shrink();
+      message = 'No model loaded — open Server Config and select a .gguf model to start chatting.';
+      color = Colors.amber;
+    } else {
+      final endpoint = settings.backendType == BackendType.openai
+          ? settings.openaiBaseUrl
+          : settings.ollamaHost;
+      message = 'Chatting via ${settings.backendType.name} backend ($endpoint)';
+      color = Colors.lightGreenAccent;
+    }
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        message,
+        style: TextStyle(fontSize: 12, color: color),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -124,20 +165,7 @@ class _ChatTabState extends State<ChatTab> {
             itemBuilder: (context, i) => _MessageBubble(message: messages[i]),
           ),
         ),
-        if (!widget.chatLogic.server.isModelLoaded)
-          Container(
-            width: double.infinity,
-            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.amber.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Text(
-              'No model loaded — open Server Config and select a .gguf model to start chatting.',
-              style: TextStyle(fontSize: 12, color: Colors.amber),
-            ),
-          ),
+        _backendStatusBanner(),
         if (_sending) const LinearProgressIndicator(minHeight: 2),
         Padding(
           padding: const EdgeInsets.all(8.0),
@@ -404,6 +432,184 @@ class _ServerConfigTabState extends State<ServerConfigTab> {
           'http://127.0.0.1:${_portController.text}/api/generate',
           style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings tab (remote API configuration)
+// ---------------------------------------------------------------------------
+
+class SettingsTab extends StatefulWidget {
+  const SettingsTab({super.key});
+
+  @override
+  State<SettingsTab> createState() => _SettingsTabState();
+}
+
+class _SettingsTabState extends State<SettingsTab> {
+  final _settings = AppSettings.instance;
+
+  late final _openaiBaseController =
+      TextEditingController(text: _settings.openaiBaseUrl);
+  late final _openaiKeyController =
+      TextEditingController(text: _settings.openaiApiKey);
+  late final _openaiModelController =
+      TextEditingController(text: _settings.openaiModel);
+  late final _ollamaHostController =
+      TextEditingController(text: _settings.ollamaHost);
+  late final _ollamaModelController =
+      TextEditingController(text: _settings.ollamaModel);
+
+  bool _saving = false;
+  String? _info;
+
+  @override
+  void dispose() {
+    _openaiBaseController.dispose();
+    _openaiKeyController.dispose();
+    _openaiModelController.dispose();
+    _ollamaHostController.dispose();
+    _ollamaModelController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _info = null;
+    });
+    await _settings.setOpenAi(
+      baseUrl: _openaiBaseController.text,
+      apiKey: _openaiKeyController.text,
+      model: _openaiModelController.text,
+    );
+    await _settings.setOllama(
+      host: _ollamaHostController.text,
+      model: _ollamaModelController.text,
+    );
+    if (!mounted) return;
+    setState(() {
+      _saving = false;
+      _info = 'Settings saved.';
+    });
+    // Reflect normalized/defaulted values back into the fields.
+    _openaiBaseController.text = _settings.openaiBaseUrl;
+    _openaiModelController.text = _settings.openaiModel;
+    _ollamaHostController.text = _settings.ollamaHost;
+    _ollamaModelController.text = _settings.ollamaModel;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hintStyle = TextStyle(
+      fontSize: 12,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('Chat Backend',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        SegmentedButton<BackendType>(
+          segments: const [
+            ButtonSegment(value: BackendType.local, label: Text('Local')),
+            ButtonSegment(value: BackendType.openai, label: Text('OpenAI')),
+            ButtonSegment(value: BackendType.ollama, label: Text('Ollama')),
+          ],
+          selected: {_settings.backendType},
+          onSelectionChanged: (selection) {
+            _settings.setBackendType(selection.first);
+            setState(() {});
+          },
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Where Mind-Forge runs its conversations.',
+          style: hintStyle,
+        ),
+        const Divider(height: 32),
+
+        const Text('OpenAI-compatible endpoint',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _openaiBaseController,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'Base URL',
+            hintText: 'https://api.openai.com/v1',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _openaiKeyController,
+          obscureText: true,
+          decoration: const InputDecoration(
+            labelText: 'API Key',
+            hintText: 'sk-...',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _openaiModelController,
+          decoration: const InputDecoration(
+            labelText: 'Model',
+            hintText: 'gpt-4o-mini',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Leave the Base URL blank to use ${AppSettings.defaultOpenaiBaseUrl}. '
+          'A blank API key sends no authorization header (fine for local '
+          'OpenAI-compatible servers).',
+          style: hintStyle,
+        ),
+        const Divider(height: 32),
+
+        const Text('Ollama host',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _ollamaHostController,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'Host / Tunnel URL',
+            hintText: 'http://localhost:11434',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _ollamaModelController,
+          decoration: const InputDecoration(
+            labelText: 'Model',
+            hintText: 'llama3.2',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Leave blank to use ${AppSettings.defaultOllamaHost}. Use a tunnel '
+          'URL (e.g. Cloudflare) to reach a remote Ollama from this device.',
+          style: hintStyle,
+        ),
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: const Icon(Icons.save_outlined),
+          label: const Text('Save settings'),
+        ),
+        if (_info != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(_info!, style: const TextStyle(color: Colors.green)),
+          ),
       ],
     );
   }

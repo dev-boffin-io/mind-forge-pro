@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:llama_cpp_dart/llama_cpp_dart.dart' as llama;
 
+import 'api_client.dart';
+import 'app_settings.dart';
 import 'memory_agent.dart';
 import 'server_manager.dart';
 
@@ -100,7 +102,13 @@ class ChatLogic {
     final relevant = await memory.retrieveRelevant(userInput, topK: 5);
     final systemPrompt = _buildSystemPrompt(relevant);
 
-    final reply = await _generateReply(userInput, prior, systemPrompt);
+    final client = resolveRemoteClient(AppSettings.instance.backendType);
+    final reply = await _generateReply(
+      userInput,
+      prior,
+      systemPrompt,
+      client: client,
+    );
     final cleanReply = await _handleActions(reply);
 
     final assistantMessage = ChatMessage(role: ChatRole.assistant, content: cleanReply);
@@ -120,17 +128,24 @@ class ChatLogic {
   Future<String> _generateReply(
     String userInput,
     List<llama.ChatMessage> prior,
-    String systemPrompt,
-  ) async {
+    String systemPrompt, {
+    RemoteApiClient? client,
+  }) async {
     var history = prior;
     var userMessage = userInput;
     var lastReply = '';
     for (var attempt = 0; attempt < _maxAttempts; attempt++) {
-      final raw = await server.generate(
-        systemPrompt: systemPrompt,
-        userMessage: userMessage,
-        history: history,
-      );
+      final raw = client != null
+          ? await client.generate(
+              systemPrompt: systemPrompt,
+              userMessage: userMessage,
+              history: history,
+            )
+          : await server.generate(
+              systemPrompt: systemPrompt,
+              userMessage: userMessage,
+              history: history,
+            );
       final cleaned = _cleanRawReply(raw);
       final problem = _validateReply(cleaned, userInput);
       if (problem == null) return cleaned;

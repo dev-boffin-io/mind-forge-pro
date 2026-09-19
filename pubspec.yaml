@@ -36,6 +36,12 @@ dependencies:
   # File picking for selecting .gguf models from device storage
   file_picker: ^8.0.0+1
 
+  # Persistent app settings (remote API endpoints/keys)
+  shared_preferences: ^2.3.2
+
+  # HTTP clients for OpenAI-compatible and Ollama chat backends
+  http: ^1.2.2
+
   # No runtime permissions are requested anywhere in the app: the model
   # picker uses Android's Storage Access Framework (needs none), and the
   # MethodChannel-triggered native actions (e.g. flashlight) will need
